@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import textwrap
+from turtle import pd
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
-
+from voice_to_speach import text_modify, transcribe_audio
 import streamlit as st
+from voice_to_speach import process_meeting_audio
 
 from agents._llm import chat
 from agents.registry import AGENT_REGISTRY, DEFAULT_AGENT_SEQUENCE
@@ -19,7 +21,7 @@ from services.audio import (
     persist_meeting_materials,
 )
 from services.google_drive import GoogleDriveError, upload_run_to_drive
-
+meeting_notes = ""
 st.set_page_config(page_title="AI Orchestrator", layout="wide")
 st.title("AI Orchestrator — маркетинговый мини-стартап")
 
@@ -50,11 +52,26 @@ with col_input:
     st.header("Материалы")
     meeting_audio = st.file_uploader(
         "Аудиозапись митинга",
-        type=["mp3", "wav", "m4a", "ogg", "mp4", "webm"],
+        type=["mp3", "wav"],
         accept_multiple_files=False,
     )
     if meeting_audio is not None:
         st.audio(meeting_audio)
+
+    if st.button("Проанализировать", type="primary"):
+        if not meeting_audio:
+            st.warning("Загрузите запись встречи, чтобы запустить анализ.")
+        else:
+            try:
+                with st.spinner("Анализируем запись встречи..."):
+                    meeting_notes = process_meeting_audio(meeting_audio)
+            except Exception as exc: 
+                st.error(f"Ошибка при анализе записи встречи: {exc}")
+            else:
+                st.success("Анализ завершен!")
+                st.subheader("Заметки по встрече")
+                # st.markdown(meeting_notes)
+
 
     default_brief = "SaaS для аналитики продаж в рознице. Цель — 50 лидов в месяц в Румынии и Молдове."
     brief = st.text_area(
@@ -293,6 +310,19 @@ with col_input:
         st.session_state.stop_requested = False
 
 with col_view:
+    # st.header("Voice analysing results")
+    with open("example.txt", "r", encoding="utf-8") as f:
+        meeting_notes = f.read()
+        meeting_notes, tasks_notes = text_modify(meeting_notes)
+    if not meeting_notes:
+        st.info("После анализа записи встречи здесь появятся заметки.")
+    else:
+        st.header("Результаты анализа записи встречи")
+        with st.expander("Показать заметки по встрече", expanded=True):
+            st.markdown(meeting_notes)
+        with st.expander("Показать задачи по встрече", expanded=False):
+            st.markdown(tasks_notes)
+    
     st.header("Прогресс")
     latest_state: CampaignState | None = st.session_state.get("latest_state")
     board = (latest_state or {}).get("board", {})
