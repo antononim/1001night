@@ -20,14 +20,14 @@ from services.audio import (
     summarize_transcript,
 )
 from services.google_drive import GoogleDriveError, upload_run_to_drive
-from voice_to_speach import (
-    key_points,
-    paragraph_modify,
-    process_meeting_audio,
-    task_to_list,
-    text_modify,
-    transcription_keys_model,
-)
+# from voice_to_speach import (
+#     key_points,
+#     paragraph_modify,
+#     process_meeting_audio,
+#     task_to_list,
+#     text_modify,
+#     transcription_keys_model,
+# )
 
 st.set_page_config(page_title="AI Orchestrator", layout="wide")
 st.title("AI Orchestrator — маркетинговый мини-стартап")
