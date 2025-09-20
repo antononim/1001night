@@ -50,7 +50,7 @@ with col_input:
     st.header("Материалы")
     meeting_audio = st.file_uploader(
         "Аудиозапись митинга",
-        type=["mp3", "wav", "m4a", "ogg", "mp4", "webm"],
+        type=["mp3", "wav"],
         accept_multiple_files=False,
     )
     if meeting_audio is not None:
@@ -300,14 +300,14 @@ with col_view:
     if latest_state and latest_state.get("interrupted"):
         st.warning("Последний запуск был остановлен до завершения всех шагов.")
 
-    status_columns = {"Backlog": [], "In Progress": [], "Done": [], "Stopped": []}
-    for task_id, task in board.items():
-        status = task.get("status", "Backlog")
-        if status not in status_columns:
-            status_columns[status] = []
-        status_columns[status].append((task.get("title", task_id), task.get("owner", ""), task.get("notes", "")))
+    # status_columns = {"Backlog": [], "In Progress": [], "Done": [], "Stopped": []}
+    # for task_id, task in board.items():
+    #     status = task.get("status", "Backlog")
+    #     if status not in status_columns:
+    #         status_columns[status] = []
+    #     status_columns[status].append((task.get("title", task_id), task.get("owner", ""), task.get("notes", "")))
 
-    backlog_col, doing_col, done_col = st.columns(3)
+    # backlog_col, doing_col, done_col = st.columns(3)
 
     def _render_column(container, title: str, items: List[tuple[str, str, str]]) -> None:
         container.subheader(title)
@@ -319,13 +319,13 @@ with col_view:
                 snippet = textwrap.shorten(notes.replace("\n", " "), width=160, placeholder="…")
                 container.caption(snippet)
 
-    _render_column(backlog_col, "Backlog", status_columns.get("Backlog", []))
-    _render_column(doing_col, "Doing", status_columns.get("In Progress", []))
-    _render_column(done_col, "Done", status_columns.get("Done", []))
-    if status_columns.get("Stopped"):
-        st.subheader("Остановлено")
-        for name, owner, notes in status_columns["Stopped"]:
-            st.markdown(f"**{name}**  _{owner}_ (остановлено)")
+    # _render_column(backlog_col, "Backlog", status_columns.get("Backlog", []))
+    # _render_column(doing_col, "Doing", status_columns.get("In Progress", []))
+    # _render_column(done_col, "Done", status_columns.get("Done", []))
+    # if status_columns.get("Stopped"):
+    #     st.subheader("Остановлено")
+    #     for name, owner, notes in status_columns["Stopped"]:
+    #         st.markdown(f"**{name}**  _{owner}_ (остановлено)")
 
     if latest_state and latest_state.get("meeting_summary"):
         st.header("Саммари митинга")
