@@ -27,9 +27,11 @@ def _get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
         return value
     if st is not None:
         try:
-            return str(st.secrets[key])
+            secret_value = st.secrets[key]
         except Exception:
-            return None
+            secret_value = None
+        if secret_value is not None:
+            return str(secret_value)
     return default
 
 

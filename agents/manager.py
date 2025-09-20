@@ -173,6 +173,7 @@ from typing import Any, Dict, List
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from agents._llm import chat
+from agents.registry import AGENT_REGISTRY, DEFAULT_AGENT_SEQUENCE
 from memory.rag import get_context, save_artifact
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -195,6 +196,7 @@ def plan(state: Dict[str, Any]) -> Dict[str, Any]:
     brief: str = state["brief"]
     run_id: str = state["run_id"]
     model: str | None = state.get("model")
+    selected_agents = state.get("selected_agents") or DEFAULT_AGENT_SEQUENCE
 
     context = get_context(run_id, k=5)
     plan_markdown = chat(
@@ -221,27 +223,23 @@ def plan(state: Dict[str, Any]) -> Dict[str, Any]:
             "owner": "Manager",
             "status": "Done",
             "notes": plan_markdown,
-        },
-        "analyst_icp": {
-            "title": "ICP и аналитика",
-            "owner": "Analyst",
+        }
+    }
+
+    for agent_id in selected_agents:
+        config = AGENT_REGISTRY.get(agent_id)
+        if not config:
+            continue
+        board[agent_id] = {
+            "title": config.title,
+            "owner": config.owner,
             "status": "Backlog",
-        },
-        "ideator_concepts": {
-            "title": "Креативные концепции",
-            "owner": "Ideator",
-            "status": "Backlog",
-        },
-        "copywriter_texts": {
-            "title": "Копирайтинг",
-            "owner": "Copywriter",
-            "status": "Backlog",
-        },
-        "manager_summary": {
-            "title": "Финальная сборка",
-            "owner": "Manager",
-            "status": "Backlog",
-        },
+        }
+
+    board["manager_summary"] = {
+        "title": "Финальная сборка",
+        "owner": "Manager",
+        "status": "Backlog",
     }
 
     return {
@@ -267,6 +265,11 @@ def assemble(state: Dict[str, Any]) -> Dict[str, Any]:
     copy = state.get("copy", "")
     plan_md = state.get("plan", "")
     brief = state["brief"]
+    meeting_summary = state.get("meeting_summary", "")
+    normalized_transcript = state.get("transcript_clean", "")
+    audio_path = state.get("audio_path")
+    selected_agents = state.get("selected_agents") or DEFAULT_AGENT_SEQUENCE
+    agents_for_summary = state.get("agents_for_summary") or selected_agents
 
     validation_prompt = chat(
         [
@@ -301,6 +304,15 @@ def assemble(state: Dict[str, Any]) -> Dict[str, Any]:
             {"text": "Настроить аналитику и отчётность", "done": False},
         ]
 
+    agent_sections = []
+    for agent_id in agents_for_summary:
+        config = AGENT_REGISTRY.get(agent_id)
+        if not config:
+            continue
+        content = state.get(config.result_key, "")
+        if content:
+            agent_sections.append({"id": agent_id, "title": config.title, "body": content})
+
     summary_markdown = SUMMARY_TEMPLATE.render(
         project_title=state.get("project_title", "Маркетинговая кампания"),
         brief=brief,
@@ -308,6 +320,10 @@ def assemble(state: Dict[str, Any]) -> Dict[str, Any]:
         icp_markdown=icp,
         concepts_markdown=concepts,
         copy_markdown=copy,
+        meeting_summary=meeting_summary,
+        normalized_transcript=normalized_transcript,
+        audio_path=audio_path,
+        agent_sections=agent_sections,
         todo_items=todo_items,
         timestamp=datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
     )
