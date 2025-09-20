@@ -38,10 +38,11 @@ def convert_mp3_to_wav(mp3_filename, wav_filename="audio.wav"):
 #     return chunks
 
 def transcribe_audio(filebytes):
-    with open("temp_audio.wav", "wb") as f:
+    with open("D:\\todel\\1hackaton\\UTM-CODESHINE-2025\\temp_audio.wav", "wb") as f:
         f.write(filebytes)
+        f.close()
     model = whisper.load_model("base")
-    result = model.transcribe("temp_audio.wav", language="en")
+    result = model.transcribe("D:\\todel\\1hackaton\\UTM-CODESHINE-2025\\temp_audio.wav", language="en")
     # print("📝 Распознанный текст:")
     return result["text"]
 
