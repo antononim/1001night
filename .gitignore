@@ -12,8 +12,8 @@ env/
 *.egg
 
 # Environment & configuration
-.env
-.env.*
+# .env
+# .env.*
 
 # Application artifacts
 artifacts/
@@ -169,7 +169,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+# .env
 .envrc
 .venv
 env/
