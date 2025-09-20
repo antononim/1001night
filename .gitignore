@@ -1,5 +1,38 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python packaging
+*.egg-info/
+*.egg
+
+# Environment & configuration
+.env
+.env.*
+
+# Application artifacts
+artifacts/
+
+# Logs
+*.log
+
+# Streamlit cache and state
+.streamlit/*
+!.streamlit
+!.streamlit/secrets.example.toml
+
+# OS metadata
+.DS_Store
+
+
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
 *.py[codz]
 *$py.class
 
@@ -7,6 +40,7 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+.DSstore
 .Python
 build/
 develop-eggs/
