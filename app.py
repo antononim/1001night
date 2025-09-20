@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import textwrap
-from turtle import pd
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
