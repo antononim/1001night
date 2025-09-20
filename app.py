@@ -6,9 +6,8 @@ from turtle import pd
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
-from voice_to_speach import text_modify, transcribe_audio
+from voice_to_speach import text_modify, transcribe_audio, process_meeting_audio, task_to_list, paragraph_modify, key_points
 import streamlit as st
-from voice_to_speach import process_meeting_audio
 
 from agents.registry import AGENT_REGISTRY, DEFAULT_AGENT_SEQUENCE
 from graph import CampaignState, prepare_initial_state, run_campaign
@@ -95,6 +94,8 @@ with st.sidebar:
     else:
         st.audio(meeting_audio)
 
+    existing_notes = ""
+
     if meeting_audio is not None:
         if st.button(
             "Транскрибировать аудио",
@@ -103,44 +104,50 @@ with st.sidebar:
         ):
             audio_bytes = meeting_audio.getvalue()
             st.session_state.audio_bytes = audio_bytes
-            st.session_state.audio_filename = meeting_audio.name or "meeting_audio.m4a"
+            st.session_state.audio_filename = meeting_audio.name or "meeting_audio.mp3"
             with st.spinner("Расшифровываем аудио…"):
                 try:
-                    materials = prepare_meeting_materials(
-                        audio_bytes,
-                        filename=st.session_state.audio_filename,
-                        llm_model=model_override,
-                    )
+                    # materials = prepare_meeting_materials(
+                    #     audio_bytes,
+                    #     filename=st.session_state.audio_filename,
+                    #     llm_model=model_override,
+                    # )
+                    materials = process_meeting_audio(meeting_audio)
                 except AudioProcessingError as exc:
                     st.error(f"Не удалось обработать аудио: {exc}")
                     materials = None
             if materials is not None:
                 st.session_state.cached_meeting_materials = materials
-                transcript_text = materials.normalized_transcript or materials.raw_transcript
-                summary_text = materials.summary or transcript_text
-                st.session_state.manual_transcript = transcript_text
-                st.session_state.transcript_summary = summary_text
-                existing_notes = st.session_state.notes_input.strip()
-                transcript_for_notes = transcript_text.strip()
-                if transcript_for_notes:
-                    if existing_notes:
-                        if transcript_for_notes not in existing_notes:
-                            st.session_state.notes_input = (
-                                f"{existing_notes}\n\n{transcript_for_notes}"
-                            )
-                    else:
-                        st.session_state.notes_input = transcript_for_notes
-                st.success("Транскрипт готов и добавлен в заметки.")
+                # transcript_text = materials.normalized_transcript or materials.raw_transcript
+                transcript_text = materials
+                # summary_text = materials.summary or transcript_text
+                # st.session_state.manual_transcript = transcript_text
+                # st.session_state.transcript_summary = summary_text
+                existing_notes = transcript_text
 
+                # transcript_for_notes = transcript_text.strip()
+                # if transcript_for_notes:
+                #     if existing_notes:
+                #         if transcript_for_notes not in existing_notes:
+                #             st.session_state.notes_input = (
+                #                 f"{existing_notes}\n\n{transcript_for_notes}"
+                #             )
+                #     else:
+                #         st.session_state.notes_input = transcript_for_notes
+                st.success("Транскрипт готов и добавлен в заметки.")
+                
+    # st.markdown(existing_notes)
     st.text_area(
         "Транскрипт митинга (можно поправить)",
+        value=existing_notes,
         key="manual_transcript",
         height=180,
     )
-
+        
     st.subheader("Заметки и договорённости")
     st.text_area(
         "То, что важно сохранить для отчёта",
+        
         key="notes_input",
         height=160,
     )
@@ -487,11 +494,25 @@ with progress_tab:
         _render_column(doing_col, "In Progress", status_columns.get("In Progress", []))
         _render_column(done_col, "Done", status_columns.get("Done", []))
 
+
 with materials_tab:
     st.subheader("Саммари митинга")
-    if latest_state and latest_state.get("meeting_summary"):
-        st.markdown(latest_state["meeting_summary"])
-    elif latest_state:
+    if existing_notes :
+        meeting_notes, tasks_section = text_modify(existing_notes)
+        meeting_notes = paragraph_modify(meeting_notes)
+        meeting_notes = key_points(meeting_notes)
+        st.expander("Параграфы из митинга", expanded=False).markdown(meeting_notes)
+        # prepare a list of tasks out of task text (tasks_section)
+        # tasks_list = task_to_list(tasks_section)
+        # tasks_section = "\n".join([f"{task_content}" for task_content in tasks_list])
+        # tasks_section = "Tasks:\n"+tasks_section
+        # print(f"{tasks_section=}")
+        # st.expander("Задачи из митинга", expanded=False).markdown(tasks_section)
+        tasks_list = task_to_list(tasks_section)
+        tasks_markdown = "\n\n---\n\n".join(tasks_list)  # разделим линии
+        st.expander("Задачи из митинга", expanded=False).markdown(tasks_markdown)
+
+    elif existing_notes:
         st.info("Саммари появится после завершения оркестрации.")
     else:
         st.info("После запуска здесь появится саммари и транскрипт митинга.")
@@ -507,9 +528,9 @@ with materials_tab:
         with st.expander("Транскрипт (черновик)"):
             st.markdown(st.session_state.manual_transcript)
 
-    if latest_state and latest_state.get("transcript_raw"):
-        with st.expander("Черновой транскрипт из аудио"):
-            st.markdown(latest_state["transcript_raw"])
+    # if latest_state and latest_state.get("transcript_raw"):
+    #     with st.expander("Черновой транскрипт из аудио"):
+    #         st.markdown(latest_state["transcript_raw"])
 
     if latest_state and latest_state.get("audio_path"):
         st.caption(f"Исходный аудио-файл сохранён как `{latest_state['audio_path']}`")

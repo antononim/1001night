@@ -9,6 +9,8 @@ from pydub import AudioSegment
 
 from google import genai
 
+import re
+
 # def record_voice(filename="audio.wav", duration=10, samplerate=16000):
 #     print(f"🎤 Запись {duration} секунд... Говорите!")
 #     audio = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype="float32")
@@ -108,5 +110,53 @@ def text_modify(text):
         return before_tasks, after_tasks
     else:
         return text.strip(), ""
-    
 
+def paragraph_modify(text):
+    regex = re.compile(r"Paragraph [0-9]:")
+    modified_text = regex.sub(lambda match: f"#### {match.group()}\n\n", text)
+    # print(regex.search(starting_text).group())
+    return modified_text
+
+def key_points(text: str) -> list[str]:
+    # Разбиваем по блокам задач
+
+    regex = re.compile(r"Key Points:")
+    modified_text = regex.sub(lambda match: f"\n{match.group()}", text)
+    # print(regex.search(starting_text).group())
+    return modified_text
+
+    
+# def task_to_list(text: str) -> list[str]:
+#     text = text.replace("\n", "\n\n")
+#     pattern = re.compile(r"Task \d+:")
+#     # return re.findall(pattern, text)
+#     result = pattern.split(text)
+#     print(f"{result=}")
+#     return result
+#     # return text.split("Task")
+    
+def task_to_list(text: str) -> list[str]:
+    # Разбиваем по блокам задач
+    tasks = re.split(r"- Task \d+:", text)
+    results = []
+
+    for t in tasks:
+        t = t.strip()
+        if not t:
+            continue
+
+        assigned_match = re.search(r"Assigned to:\s*(.*)", t)
+        task_match = re.search(r"Task:\s*(.*)", t)
+        details_match = re.search(r"Details:\s*(.*)", t, re.DOTALL)
+
+        assigned = assigned_match.group(1).strip() if assigned_match else "Unassigned"
+        task = task_match.group(1).strip() if task_match else "No task description"
+        details = details_match.group(1).strip() if details_match else "No details"
+
+        results.append(
+            f"**Assigned to:** {assigned}\n\n"
+            f"**Task:** {task}\n\n"
+            f"**Details:** {details}"
+        )
+
+    return results
