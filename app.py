@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import textwrap
 import zipfile
 from pathlib import Path
@@ -15,89 +16,65 @@ from services.audio import (
     AudioProcessingError,
     MeetingMaterials,
     normalize_transcript,
-    prepare_meeting_materials,
     persist_meeting_materials,
     summarize_transcript,
 )
-from services.dropbox_storage import DropboxError, upload_run_to_dropbox
-
+from services.google_drive import GoogleDriveError, upload_run_to_drive
+from voice_to_speach import (
+    key_points,
+    paragraph_modify,
+    process_meeting_audio,
+    task_to_list,
+    text_modify,
+    transcription_keys_model,
+)
 
 st.set_page_config(page_title="AI Orchestrator", layout="wide")
 st.title("AI Orchestrator — маркетинговый мини-стартап")
 
-# --- helpers -----------------------------------------------------------------
-def _get_dropbox_token() -> Optional[str]:
-    """Берём токен из secrets.toml (DROPBOX_TOKEN) или из session_state (введённый в UI)."""
-    token_from_secrets = None
-    try:
-        # st.secrets может отсутствовать локально — ловим исключение
-        token_from_secrets = st.secrets.get("DROPBOX_TOKEN", None)  # type: ignore[attr-defined]
-    except Exception:
-        token_from_secrets = None
-    return st.session_state.get("dropbox_token") or token_from_secrets
-
-
-# --- session state bootstrap -------------------------------------------------
-if "latest_state" not in st.session_state:
-    st.session_state.latest_state = None
-if "run_id" not in st.session_state:
-    st.session_state.run_id = None
-if "stop_requested" not in st.session_state:
-    st.session_state.stop_requested = False
-if "is_running" not in st.session_state:
-    st.session_state.is_running = False
-
-# Dropbox-related flags/state
-if "save_to_dropbox" not in st.session_state:
-    st.session_state.save_to_dropbox = False
-if "dropbox_parent_path" not in st.session_state:
-    st.session_state.dropbox_parent_path = "/"
-if "dropbox_last_link" not in st.session_state:
-    st.session_state.dropbox_last_link = ""
-if "dropbox_token" not in st.session_state:
-    # можно оставить пустым — тогда возьмём из secrets
-    st.session_state.dropbox_token = ""
-
-if "notes_input" not in st.session_state:
-    st.session_state.notes_input = ""
-if "business_brief" not in st.session_state:
-    st.session_state.business_brief = (
+# --- Session state bootstrap -------------------------------------------------
+DEFAULTS: Dict[str, object] = {
+    "latest_state": None,
+    "run_id": None,
+    "stop_requested": False,
+    "is_running": False,
+    "save_to_drive": False,
+    "drive_parent_id": "",
+    "drive_last_link": "",
+    "notes_input": "",
+    "business_brief": (
         "SaaS для аналитики продаж в рознице. Цель — 50 лидов в месяц в Румынии и Молдове."
-    )
-if "manual_transcript" not in st.session_state:
-    st.session_state.manual_transcript = ""
-if "transcript_summary" not in st.session_state:
-    st.session_state.transcript_summary = ""
-if "cached_meeting_materials" not in st.session_state:
-    st.session_state.cached_meeting_materials: Optional[MeetingMaterials] = None
-if "audio_bytes" not in st.session_state:
-    st.session_state.audio_bytes: Optional[bytes] = None
-if "audio_filename" not in st.session_state:
-    st.session_state.audio_filename: Optional[str] = None
-if "agents_for_run" not in st.session_state:
-    st.session_state.agents_for_run = list(DEFAULT_AGENT_SEQUENCE)
-if "agents_for_summary" not in st.session_state:
-    st.session_state.agents_for_summary = list(DEFAULT_AGENT_SEQUENCE)
-if "project_title_input" not in st.session_state:
-    st.session_state.project_title_input = "Retail Analytics SaaS"
-if "model_name_input" not in st.session_state:
-    st.session_state.model_name_input = ""
+    ),
+    "manual_transcript": "",
+    "transcript_summary": "",
+    "cached_meeting_materials": None,
+    "audio_bytes": None,
+    "audio_filename": None,
+    "agents_for_run": list(DEFAULT_AGENT_SEQUENCE),
+    "agents_for_summary": list(DEFAULT_AGENT_SEQUENCE),
+    "project_title_input": "Retail Analytics SaaS",
+    "model_name_input": "",
+    "meeting_analysis": "",
+}
+
+for key, value in DEFAULTS.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
 progress_placeholder = st.empty()
 status_placeholder = st.empty()
 
-# --- sidebar controls --------------------------------------------------------
+# --- Sidebar controls --------------------------------------------------------
 with st.sidebar:
     st.subheader("Параметры кампании")
     project_title = st.text_input(
         "Название кампании",
         key="project_title_input",
     ).strip()
-    model_name = st.text_input(
+    model_override = st.text_input(
         "Модель LLM (опционально)",
         key="model_name_input",
-    ).strip()
-    model_override = model_name or None
+    ).strip() or None
 
     st.subheader("Материалы митинга")
     meeting_audio = st.file_uploader(
@@ -123,9 +100,10 @@ with st.sidebar:
             st.session_state.audio_filename = meeting_audio.name or "meeting_audio.m4a"
             with st.spinner("Расшифровываем аудио…"):
                 try:
-                    materials = prepare_meeting_materials(
-                        audio_bytes,
+                    materials = process_meeting_audio(
+                        meeting_audio,
                         filename=st.session_state.audio_filename,
+                        whisper_model=os.getenv("WHISPER_LOCAL_MODEL"),
                         llm_model=model_override,
                     )
                 except AudioProcessingError as exc:
@@ -133,20 +111,27 @@ with st.sidebar:
                     materials = None
             if materials is not None:
                 st.session_state.cached_meeting_materials = materials
-                transcript_text = materials.normalized_transcript or materials.raw_transcript
+                transcript_text = (
+                    materials.normalized_transcript or materials.raw_transcript
+                )
                 summary_text = materials.summary or transcript_text
                 st.session_state.manual_transcript = transcript_text
                 st.session_state.transcript_summary = summary_text
-                existing_notes = st.session_state.notes_input.strip()
-                transcript_for_notes = transcript_text.strip()
-                if transcript_for_notes:
-                    if existing_notes:
-                        if transcript_for_notes not in existing_notes:
-                            st.session_state.notes_input = (
-                                f"{existing_notes}\n\n{transcript_for_notes}"
-                            )
-                    else:
-                        st.session_state.notes_input = transcript_for_notes
+                try:
+                    analysis_text = transcription_keys_model(
+                        transcript_text,
+                        llm_model=model_override,
+                    )
+                except AudioProcessingError as exc:
+                    st.warning(f"Не удалось подготовить анализ митинга: {exc}")
+                    analysis_text = summary_text
+                st.session_state.meeting_analysis = analysis_text
+                if analysis_text:
+                    notes_base = st.session_state.notes_input.strip()
+                    if not notes_base:
+                        st.session_state.notes_input = analysis_text
+                    elif analysis_text not in notes_base:
+                        st.session_state.notes_input = f"{notes_base}\n\n{analysis_text}".strip()
                 st.success("Транскрипт готов и добавлен в заметки.")
 
     st.text_area(
@@ -177,7 +162,6 @@ with st.sidebar:
         help="Будут использованы как дополнительный контекст",
         key="extra_docs_uploader",
     )
-
     extra_documents: Dict[str, str] = {}
     if uploaded_files:
         for file in uploaded_files:
@@ -204,18 +188,14 @@ with st.sidebar:
     if selected_agents != st.session_state.agents_for_run:
         st.session_state.agents_for_run = selected_agents
 
-    filtered_summary = [
-        agent_id for agent_id in st.session_state.agents_for_summary if agent_id in selected_agents
-    ]
-    if selected_agents and not filtered_summary:
-        filtered_summary = list(selected_agents)
-    if filtered_summary != st.session_state.agents_for_summary:
-        st.session_state.agents_for_summary = filtered_summary
-
     summary_agents_raw = st.multiselect(
         "В итоговый отчёт",
         options=selected_agents,
-        default=st.session_state.agents_for_summary,
+        default=[
+            agent_id
+            for agent_id in st.session_state.agents_for_summary
+            if agent_id in selected_agents
+        ] or list(selected_agents),
         format_func=lambda agent_id: agent_labels.get(agent_id, agent_id),
     )
     summary_agents = [
@@ -224,25 +204,16 @@ with st.sidebar:
     if summary_agents != st.session_state.agents_for_summary:
         st.session_state.agents_for_summary = summary_agents
 
-    # --- Сохранение в Dropbox ------------------------------------------------
-    st.subheader("Сохранение (Dropbox)")
-    st.session_state.save_to_dropbox = st.checkbox(
-        "Отправить артефакты в Dropbox",
-        value=st.session_state.save_to_dropbox,
+    st.subheader("Сохранение")
+    st.session_state.save_to_drive = st.checkbox(
+        "Отправить артефакты в Google Drive",
+        value=st.session_state.save_to_drive,
     )
-
-    with st.expander("Настройки Dropbox"):
-        st.caption("Можешь указать токен здесь или положить его в `.streamlit/secrets.toml` как `DROPBOX_TOKEN`.")
-        st.session_state.dropbox_token = st.text_input(
-            "Dropbox Access Token (если не используешь secrets)",
-            value=st.session_state.dropbox_token,
-            type="password",
-            help="Сгенерируй в Dropbox App Console → Settings → Generate access token",
-        )
-        st.session_state.dropbox_parent_path = st.text_input(
-            "Путь папки в Dropbox",
-            value=st.session_state.dropbox_parent_path or "/",
-            help="Например: /AI-Orchestrator. По умолчанию — корень /",
+    if st.session_state.save_to_drive:
+        st.session_state.drive_parent_id = st.text_input(
+            "ID папки (опционально)",
+            value=st.session_state.drive_parent_id,
+            help="Если оставить пустым, папка будет создана в корне диска",
         )
 
     run_button = st.button(
@@ -258,18 +229,18 @@ with st.sidebar:
         key="stop_workflow_button",
     )
 
-    if not selected_agents:
-        st.warning("Выбери хотя бы одного агента для запуска.")
-
     if stop_button:
         st.session_state.stop_requested = True
         st.info("Остановка запрошена. Процесс завершится после текущего шага.")
 
-# --- orchestration trigger ---------------------------------------------------
+# --- Run orchestration -------------------------------------------------------
 if run_button:
     st.session_state.stop_requested = False
     st.session_state.is_running = True
-    st.session_state.dropbox_last_link = ""
+    st.session_state.drive_last_link = ""
+
+    selected_agents = st.session_state.agents_for_run
+    summary_agents = st.session_state.agents_for_summary
 
     business_brief_text = st.session_state.business_brief.strip()
     if not business_brief_text:
@@ -282,17 +253,16 @@ if run_button:
 
     attachments = dict(extra_documents)
 
-    meeting_materials = st.session_state.cached_meeting_materials
-    audio_bytes = st.session_state.audio_bytes
-    audio_filename = st.session_state.audio_filename
+    meeting_materials: Optional[MeetingMaterials] = st.session_state.cached_meeting_materials
+    audio_bytes: Optional[bytes] = st.session_state.audio_bytes
+    audio_filename: Optional[str] = st.session_state.audio_filename
 
-    if meeting_materials is None and meeting_audio is not None:
-        audio_bytes = meeting_audio.getvalue()
-        audio_filename = meeting_audio.name or "meeting_audio.m4a"
+    if meeting_materials is None and audio_bytes:
         try:
-            meeting_materials = prepare_meeting_materials(
+            meeting_materials = process_meeting_audio(
                 audio_bytes,
-                filename=audio_filename,
+                filename=audio_filename or "meeting_audio.m4a",
+                whisper_model=os.getenv("WHISPER_LOCAL_MODEL"),
                 llm_model=model_override,
             )
         except AudioProcessingError as exc:
@@ -300,33 +270,24 @@ if run_button:
             st.error(f"Не удалось обработать аудио: {exc}")
             st.stop()
         st.session_state.cached_meeting_materials = meeting_materials
-        st.session_state.audio_bytes = audio_bytes
-        st.session_state.audio_filename = audio_filename
-        st.session_state.manual_transcript = (
-            meeting_materials.normalized_transcript or meeting_materials.raw_transcript
-        )
-        st.session_state.transcript_summary = (
-            meeting_materials.summary
-            or meeting_materials.normalized_transcript
-            or meeting_materials.raw_transcript
-        )
-        manual_transcript_text = st.session_state.manual_transcript.strip()
+        transcript_text = meeting_materials.normalized_transcript or meeting_materials.raw_transcript
+        st.session_state.manual_transcript = transcript_text
+        st.session_state.transcript_summary = meeting_materials.summary
+        try:
+            st.session_state.meeting_analysis = transcription_keys_model(
+                transcript_text,
+                llm_model=model_override,
+            )
+        except AudioProcessingError:
+            st.session_state.meeting_analysis = meeting_materials.summary
         if not notes_text:
-            notes_text = (
-                meeting_materials.summary
-                or meeting_materials.normalized_transcript
-                or meeting_materials.raw_transcript
-            ).strip()
+            notes_text = meeting_materials.summary.strip()
             st.session_state.notes_input = notes_text
 
     if manual_transcript_text:
-        source_transcript = ""
-        if meeting_materials is not None:
-            source_transcript = (
-                meeting_materials.normalized_transcript
-                or meeting_materials.raw_transcript
-                or ""
-            ).strip()
+        source_transcript = (
+            meeting_materials.normalized_transcript if meeting_materials else ""
+        ).strip()
         if not source_transcript or manual_transcript_text != source_transcript:
             normalized_manual = normalize_transcript(
                 manual_transcript_text,
@@ -347,16 +308,22 @@ if run_button:
             )
             st.session_state.cached_meeting_materials = meeting_materials
             st.session_state.transcript_summary = meeting_materials.summary
+            try:
+                st.session_state.meeting_analysis = transcription_keys_model(
+                    meeting_materials.normalized_transcript,
+                    llm_model=model_override,
+                )
+            except AudioProcessingError:
+                st.session_state.meeting_analysis = meeting_materials.summary
 
     brief_sections = [business_brief_text]
     if notes_text:
         brief_sections.append(f"Заметки митинга:\n{notes_text}")
-    base_brief = "\n\n".join(brief_sections)
+    base_brief = "\n\n".join(section for section in brief_sections if section)
 
     meeting_summary_text = (
-        st.session_state.transcript_summary.strip()
-        if st.session_state.transcript_summary.strip()
-        else notes_text
+        st.session_state.meeting_analysis.strip()
+        or notes_text
         or business_brief_text
     )
 
@@ -368,8 +335,12 @@ if run_button:
         selected_agents=selected_agents,
         agents_for_summary=summary_agents,
         meeting_summary=meeting_summary_text,
-        transcript_raw=meeting_materials.raw_transcript if meeting_materials else None,
-        transcript_clean=meeting_materials.normalized_transcript if meeting_materials else None,
+        transcript_raw=(
+            meeting_materials.raw_transcript if meeting_materials else None
+        ),
+        transcript_clean=(
+            meeting_materials.normalized_transcript if meeting_materials else None
+        ),
     )
 
     st.session_state.run_id = initial_state["run_id"]
@@ -440,39 +411,29 @@ if run_button:
     else:
         st.success("Готово! Кампания собрана.")
 
-    # --- Upload to Dropbox ---------------------------------------------------
     if (
-        st.session_state.save_to_dropbox
+        st.session_state.save_to_drive
         and not final_state.get("interrupted")
         and st.session_state.run_id
     ):
-        token = _get_dropbox_token()
-        if not token:
-            st.warning(
-                "Dropbox токен не найден. Укажи его в secrets.toml как `DROPBOX_TOKEN` "
-                "или введи в настройках Dropbox в сайдбаре."
-            )
-        else:
-            run_dir_path = (rag.ARTIFACT_ROOT / st.session_state.run_id).resolve()
-            with st.spinner("Загружаем артефакты в Dropbox…"):
-                try:
-                    folder_link = upload_run_to_dropbox(
-                        st.session_state.run_id,
-                        run_dir_path,
-                        token=token,
-                        parent_path=st.session_state.dropbox_parent_path or "/",
-                    )
-                except DropboxError as exc:
-                    st.warning(f"Не удалось загрузить артефакты в Dropbox: {exc}")
-                else:
-                    st.session_state.dropbox_last_link = folder_link
-                    st.success(f"Артефакты сохранены в Dropbox: {folder_link}")
+        run_dir_path = (rag.ARTIFACT_ROOT / st.session_state.run_id).resolve()
+        with st.spinner("Загружаем артефакты в Google Drive…"):
+            try:
+                folder_link = upload_run_to_drive(
+                    st.session_state.run_id,
+                    run_dir_path,
+                    parent_id=st.session_state.drive_parent_id or None,
+                )
+            except GoogleDriveError as exc:
+                st.warning(f"Не удалось загрузить артефакты в Google Drive: {exc}")
+            else:
+                st.session_state.drive_last_link = folder_link
+                st.success(f"Артефакты сохранены в Google Drive: {folder_link}")
 
-    st.session_state.stop_requested = False
-
-# --- main content ------------------------------------------------------------
+# --- Main content ------------------------------------------------------------
 latest_state: CampaignState | None = st.session_state.get("latest_state")
 run_id = st.session_state.get("run_id")
+analysis_output = st.session_state.meeting_analysis
 
 progress_tab, materials_tab, artifacts_tab, summary_tab = st.tabs(
     [
@@ -527,12 +488,16 @@ with progress_tab:
 
 with materials_tab:
     st.subheader("Саммари митинга")
-    if latest_state and latest_state.get("meeting_summary"):
-        st.markdown(latest_state["meeting_summary"])
-    elif latest_state:
-        st.info("Саммари появится после завершения оркестрации.")
+    if analysis_output:
+        meeting_notes, tasks_section = text_modify(analysis_output)
+        meeting_notes = key_points(paragraph_modify(meeting_notes))
+        st.expander("Параграфы из митинга", expanded=False).markdown(meeting_notes)
+        tasks_list = task_to_list(tasks_section)
+        if tasks_list:
+            tasks_markdown = "\n\n---\n\n".join(tasks_list)
+            st.expander("Задачи из митинга", expanded=False).markdown(tasks_markdown)
     else:
-        st.info("После запуска здесь появится саммари и транскрипт митинга.")
+        st.info("После запуска здесь появится структурированный разбор митинга.")
 
     if st.session_state.notes_input.strip():
         st.markdown("**Заметки**")
@@ -545,17 +510,13 @@ with materials_tab:
         with st.expander("Транскрипт (черновик)"):
             st.markdown(st.session_state.manual_transcript)
 
-    if latest_state and latest_state.get("transcript_raw"):
-        with st.expander("Черновой транскрипт из аудио"):
-            st.markdown(latest_state["transcript_raw"])
-
     if latest_state and latest_state.get("audio_path"):
         st.caption(f"Исходный аудио-файл сохранён как `{latest_state['audio_path']}`")
 
 with artifacts_tab:
     st.subheader("Артефакты кампании")
-    if st.session_state.dropbox_last_link:
-        st.info(f"Артефакты выгружены в Dropbox: {st.session_state.dropbox_last_link}")
+    if st.session_state.drive_last_link:
+        st.info(f"Артефакты выгружены в Google Drive: {st.session_state.drive_last_link}")
 
     artifacts = rag.list_artifacts(run_id) if run_id else []
     run_dir_path: Optional[Path] = (rag.ARTIFACT_ROOT / run_id) if run_id else None
