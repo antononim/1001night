@@ -111,28 +111,32 @@ with st.sidebar:
                     #     filename=st.session_state.audio_filename,
                     #     llm_model=model_override,
                     # )
-                    materials = process_meeting_audio(meeting_audio)
+                    # WHY WHY WHY WHY
+                    # materials = process_meeting_audio(meeting_audio)
+                    raw_trans = process_meeting_audio(meeting_audio)
+                    norm_trans = normalize_transcript(raw_trans)
+                    sum_trans = summarize_transcript(norm_trans)
+                    materials = MeetingMaterials(raw_transcript=raw_trans, normalized_transcript=raw_trans, summary=sum_trans)
                 except AudioProcessingError as exc:
                     st.error(f"Не удалось обработать аудио: {exc}")
                     materials = None
             if materials is not None:
                 st.session_state.cached_meeting_materials = materials
-                # transcript_text = materials.normalized_transcript or materials.raw_transcript
-                transcript_text = materials
-                # summary_text = materials.summary or transcript_text
-                # st.session_state.manual_transcript = transcript_text
-                # st.session_state.transcript_summary = summary_text
+                transcript_text = materials.normalized_transcript or materials.raw_transcript
+                transcript_text = materials.raw_transcript
+                summary_text = materials.summary or transcript_text
+                st.session_state.manual_transcript = transcript_text
+                st.session_state.transcript_summary = summary_text
                 existing_notes = transcript_text
-
-                # transcript_for_notes = transcript_text.strip()
-                # if transcript_for_notes:
-                #     if existing_notes:
-                #         if transcript_for_notes not in existing_notes:
-                #             st.session_state.notes_input = (
-                #                 f"{existing_notes}\n\n{transcript_for_notes}"
-                #             )
-                #     else:
-                #         st.session_state.notes_input = transcript_for_notes
+                transcript_for_notes = transcript_text.strip()
+                if transcript_for_notes:
+                    if existing_notes:
+                        if transcript_for_notes not in existing_notes:
+                            st.session_state.notes_input = (
+                                f"{existing_notes}\n\n{transcript_for_notes}"
+                            )
+                    else:
+                        st.session_state.notes_input = transcript_for_notes
                 st.success("Транскрипт готов и добавлен в заметки.")
                 
     # st.markdown(existing_notes)
