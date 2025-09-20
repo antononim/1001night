@@ -19,10 +19,23 @@ from services.audio import (
     persist_meeting_materials,
     summarize_transcript,
 )
-from services.google_drive import GoogleDriveError, upload_run_to_drive
+from services.dropbox_storage import DropboxError, upload_run_to_dropbox
+
 
 st.set_page_config(page_title="AI Orchestrator", layout="wide")
 st.title("AI Orchestrator — маркетинговый мини-стартап")
+
+# --- helpers -----------------------------------------------------------------
+def _get_dropbox_token() -> Optional[str]:
+    """Берём токен из secrets.toml (DROPBOX_TOKEN) или из session_state (введённый в UI)."""
+    token_from_secrets = None
+    try:
+        # st.secrets может отсутствовать локально — ловим исключение
+        token_from_secrets = st.secrets.get("DROPBOX_TOKEN", None)  # type: ignore[attr-defined]
+    except Exception:
+        token_from_secrets = None
+    return st.session_state.get("dropbox_token") or token_from_secrets
+
 
 # --- session state bootstrap -------------------------------------------------
 if "latest_state" not in st.session_state:
@@ -33,12 +46,18 @@ if "stop_requested" not in st.session_state:
     st.session_state.stop_requested = False
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
-if "save_to_drive" not in st.session_state:
-    st.session_state.save_to_drive = False
-if "drive_parent_id" not in st.session_state:
-    st.session_state.drive_parent_id = ""
-if "drive_last_link" not in st.session_state:
-    st.session_state.drive_last_link = ""
+
+# Dropbox-related flags/state
+if "save_to_dropbox" not in st.session_state:
+    st.session_state.save_to_dropbox = False
+if "dropbox_parent_path" not in st.session_state:
+    st.session_state.dropbox_parent_path = "/"
+if "dropbox_last_link" not in st.session_state:
+    st.session_state.dropbox_last_link = ""
+if "dropbox_token" not in st.session_state:
+    # можно оставить пустым — тогда возьмём из secrets
+    st.session_state.dropbox_token = ""
+
 if "notes_input" not in st.session_state:
     st.session_state.notes_input = ""
 if "business_brief" not in st.session_state:
@@ -176,12 +195,14 @@ with st.sidebar:
     selected_agents_raw = st.multiselect(
         "Кто работает",
         options=agent_ids,
+        default=st.session_state.agents_for_run,
         format_func=lambda agent_id: agent_labels.get(agent_id, agent_id),
-        key="agents_for_run",
     )
     selected_agents = [
         agent_id for agent_id in DEFAULT_AGENT_SEQUENCE if agent_id in selected_agents_raw
     ]
+    if selected_agents != st.session_state.agents_for_run:
+        st.session_state.agents_for_run = selected_agents
 
     filtered_summary = [
         agent_id for agent_id in st.session_state.agents_for_summary if agent_id in selected_agents
@@ -194,29 +215,40 @@ with st.sidebar:
     summary_agents_raw = st.multiselect(
         "В итоговый отчёт",
         options=selected_agents,
+        default=st.session_state.agents_for_summary,
         format_func=lambda agent_id: agent_labels.get(agent_id, agent_id),
-        key="agents_for_summary",
     )
     summary_agents = [
         agent_id for agent_id in selected_agents if agent_id in summary_agents_raw
     ] or list(selected_agents)
+    if summary_agents != st.session_state.agents_for_summary:
+        st.session_state.agents_for_summary = summary_agents
 
-    st.subheader("Сохранение")
-    st.session_state.save_to_drive = st.checkbox(
-        "Отправить артефакты в Google Drive",
-        value=st.session_state.save_to_drive,
+    # --- Сохранение в Dropbox ------------------------------------------------
+    st.subheader("Сохранение (Dropbox)")
+    st.session_state.save_to_dropbox = st.checkbox(
+        "Отправить артефакты в Dropbox",
+        value=st.session_state.save_to_dropbox,
     )
-    if st.session_state.save_to_drive:
-        st.session_state.drive_parent_id = st.text_input(
-            "ID папки (опционально)",
-            value=st.session_state.drive_parent_id,
-            help="Если оставить пустым, папка будет создана в корне диска",
+
+    with st.expander("Настройки Dropbox"):
+        st.caption("Можешь указать токен здесь или положить его в `.streamlit/secrets.toml` как `DROPBOX_TOKEN`.")
+        st.session_state.dropbox_token = st.text_input(
+            "Dropbox Access Token (если не используешь secrets)",
+            value=st.session_state.dropbox_token,
+            type="password",
+            help="Сгенерируй в Dropbox App Console → Settings → Generate access token",
+        )
+        st.session_state.dropbox_parent_path = st.text_input(
+            "Путь папки в Dropbox",
+            value=st.session_state.dropbox_parent_path or "/",
+            help="Например: /AI-Orchestrator. По умолчанию — корень /",
         )
 
     run_button = st.button(
         "Запустить оркестрацию",
         type="primary",
-        disabled=st.session_state.is_running or not selected_agents,
+        disabled=st.session_state.is_running or not st.session_state.agents_for_run,
         key="run_workflow_button",
     )
     stop_button = st.button(
@@ -237,7 +269,7 @@ with st.sidebar:
 if run_button:
     st.session_state.stop_requested = False
     st.session_state.is_running = True
-    st.session_state.drive_last_link = ""
+    st.session_state.dropbox_last_link = ""
 
     business_brief_text = st.session_state.business_brief.strip()
     if not business_brief_text:
@@ -337,8 +369,7 @@ if run_button:
         agents_for_summary=summary_agents,
         meeting_summary=meeting_summary_text,
         transcript_raw=meeting_materials.raw_transcript if meeting_materials else None,
-        transcript_clean=
-        meeting_materials.normalized_transcript if meeting_materials else None,
+        transcript_clean=meeting_materials.normalized_transcript if meeting_materials else None,
     )
 
     st.session_state.run_id = initial_state["run_id"]
@@ -409,24 +440,33 @@ if run_button:
     else:
         st.success("Готово! Кампания собрана.")
 
+    # --- Upload to Dropbox ---------------------------------------------------
     if (
-        st.session_state.save_to_drive
+        st.session_state.save_to_dropbox
         and not final_state.get("interrupted")
         and st.session_state.run_id
     ):
-        run_dir_path = (rag.ARTIFACT_ROOT / st.session_state.run_id).resolve()
-        with st.spinner("Загружаем артефакты в Google Drive…"):
-            try:
-                folder_link = upload_run_to_drive(
-                    st.session_state.run_id,
-                    run_dir_path,
-                    parent_id=st.session_state.drive_parent_id or None,
-                )
-            except GoogleDriveError as exc:
-                st.warning(f"Не удалось загрузить артефакты в Google Drive: {exc}")
-            else:
-                st.session_state.drive_last_link = folder_link
-                st.success(f"Артефакты сохранены в Google Drive: {folder_link}")
+        token = _get_dropbox_token()
+        if not token:
+            st.warning(
+                "Dropbox токен не найден. Укажи его в secrets.toml как `DROPBOX_TOKEN` "
+                "или введи в настройках Dropbox в сайдбаре."
+            )
+        else:
+            run_dir_path = (rag.ARTIFACT_ROOT / st.session_state.run_id).resolve()
+            with st.spinner("Загружаем артефакты в Dropbox…"):
+                try:
+                    folder_link = upload_run_to_dropbox(
+                        st.session_state.run_id,
+                        run_dir_path,
+                        token=token,
+                        parent_path=st.session_state.dropbox_parent_path or "/",
+                    )
+                except DropboxError as exc:
+                    st.warning(f"Не удалось загрузить артефакты в Dropbox: {exc}")
+                else:
+                    st.session_state.dropbox_last_link = folder_link
+                    st.success(f"Артефакты сохранены в Dropbox: {folder_link}")
 
     st.session_state.stop_requested = False
 
@@ -514,8 +554,8 @@ with materials_tab:
 
 with artifacts_tab:
     st.subheader("Артефакты кампании")
-    if st.session_state.drive_last_link:
-        st.info(f"Артефакты выгружены в Google Drive: {st.session_state.drive_last_link}")
+    if st.session_state.dropbox_last_link:
+        st.info(f"Артефакты выгружены в Dropbox: {st.session_state.dropbox_last_link}")
 
     artifacts = rag.list_artifacts(run_id) if run_id else []
     run_dir_path: Optional[Path] = (rag.ARTIFACT_ROOT / run_id) if run_id else None

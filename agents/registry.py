@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List
 
 from agents import analyst, copywriter, ideator
+from agents import finance, cto
 
 AgentHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 
@@ -25,7 +26,7 @@ class AgentConfig:
 _AGENT_CONFIGS: List[AgentConfig] = [
     AgentConfig(
         id="analyst_icp",
-        title="Аналитик (ICP)",
+        title="ICP Analyst",
         owner="Analyst",
         description="Исследует рынок и формирует портрет целевой аудитории.",
         handler=analyst.icp,
@@ -33,7 +34,7 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="ideator_concepts",
-        title="Креативщик",
+        title="Creative Strategist",
         owner="Ideator",
         description="Готовит креативные концепции кампании и сообщения для коммуникаций.",
         handler=ideator.concepts,
@@ -41,11 +42,27 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="copywriter_texts",
-        title="Копирайтер",
+        title="Copywriter",
         owner="Copywriter",
         description="Создает тексты для промо-материалов с учётом выбранной концепции.",
         handler=copywriter.texts,
         result_key="copy",
+    ),
+    AgentConfig(
+        id="finance_analysis",
+        title="Financial Analyst",
+        owner="CFO",
+        description="Оценивает финансовую реализуемость идеи, анализирует сценарии и риски.",
+        handler=finance.analysis,
+        result_key="finance",
+    ),
+    AgentConfig(
+        id="cto_roadmap",
+        title="Techical Assistant",
+        owner="CTO",
+        description="Формирует техническое видение и план реализации продукта и кампании.",
+        handler=cto.roadmap,
+        result_key="technology",
     ),
 ]
 
