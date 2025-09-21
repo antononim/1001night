@@ -106,7 +106,7 @@ class AgentConfig:
 _AGENT_CONFIGS: List[AgentConfig] = [
     AgentConfig(
         id="analyst_icp",
-        title="Аналитик (ICP)",
+        title="Analyst (ICP)",
         owner="Analyst",
         description="Исследует рынок и формирует портрет целевой аудитории.",
         handler=analyst.icp,
@@ -114,7 +114,7 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="ideator_concepts",
-        title="Креативщик",
+        title="Ideator",
         owner="Ideator",
         description="Готовит креативные концепции кампании и сообщения для коммуникаций.",
         handler=ideator.concepts,
@@ -122,7 +122,7 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="finance_assessment",
-        title="Финансовый директор",
+        title="Finance assistant",
         owner="CFO",
         description="Оценивает бюджет, риски и финансовые сценарии проекта.",
         handler=finance.assessment,
@@ -130,7 +130,7 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="technician_blueprint",
-        title="Технический директор",
+        title="Technician",
         owner="CTO",
         description="Определяет архитектуру, стек и план реализации продукта.",
         handler=technician.blueprint,
@@ -138,7 +138,7 @@ _AGENT_CONFIGS: List[AgentConfig] = [
     ),
     AgentConfig(
         id="copywriter_texts",
-        title="Копирайтер",
+        title="Copywriter",
         owner="Copywriter",
         description="Создает тексты для промо-материалов с учётом выбранной концепции.",
         handler=copywriter.texts,
