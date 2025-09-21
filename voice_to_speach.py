@@ -85,7 +85,7 @@ Tasks:
 Do not add any extra commentary. Keep it clear, concise, and structured.
 
 '''
-    api_key = "AIzaSyBWwQ3Byxkfs0cw8Qy3i3SI-tJAg1nv_Us"
+    api_key = "AIzaSyAGLdSG-C6xJ8cWXHlpyXMPKir_JpxGmTw"
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
     model="gemini-2.5-flash",
